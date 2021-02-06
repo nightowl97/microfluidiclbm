@@ -5,6 +5,8 @@ from numpy.linalg import norm
 from PIL import Image
 import matplotlib.animation as animation
 from datetime import datetime
+from progressbar import progressbar
+import time
 
 
 # TODO: Colors to define site type (Inlet, Outlet, Bounce-back, Fluid etc.)
@@ -26,6 +28,7 @@ class D2Q9Lattice:
     def __init__(self, geometry_image, ini_vel, re, animate=False):
         # Initialize object and get geometry
         self.t = 0
+        self.runtime = None
         self.c_opposite = [self.c.tolist().index((-self.c[i]).tolist()) for i in range(9)]
         # Velocity weights
         self.weights = np.ones(9) * (1 / 36)
@@ -56,6 +59,11 @@ class D2Q9Lattice:
         self.Re = re
         self.nu = self.ini_vel * self.Ny / self.Re  # U * r / Re
         self.omega = 1 / (3 * self.nu + 0.5)
+        if self.omega > 1:
+            print("########################################################")
+            print("# Flow with viscosity (in lattice units): {:4f}     #".format(self.nu))
+            print("# Over-relaxed simulation: w = {:.2f}                 #".format(self.omega))
+            print("########################################################")
 
         # Initialize state
         self.inlet = self.fluid_geometry[0]  # Inlet to the left at x = 0
@@ -97,6 +105,7 @@ class D2Q9Lattice:
         self.u = (1 / rho_expanded) * np.dot(self.Fin, self.c)
 
         # Inflow (Zou/He condition) (See J. Latt slides p.71)
+        self.u[0, :, :] = np.asarray([[self.ini_vel, 0]])
         self.rho[0, :] = (1 / (1 - self.u[0, :, 0])) * \
                          (self.sum_pops(self.Fin[0, :, self.center]) +
                           2 * self.sum_pops(self.Fin[0, :, self.incoming_right]))
@@ -106,9 +115,8 @@ class D2Q9Lattice:
 
     def collide(self):
         # self.Fout = self.Fin - self.omega * (self.Fin - self.Feq)
-        # use numexpr
         fin, w, feq = self.Fin, self.omega, self.Feq
-        self.Fout = ne.evaluate("fin - w * (fin - feq)")
+        self.Fout = ne.evaluate("fin - w * (fin - feq)")  # use numexpr
         # self.Fout[self.fluid_geometry] = self.Fin[self.fluid_geometry] - self.omega * \
         #                                  (self.Fin[self.fluid_geometry] - self.Feq[self.fluid_geometry])
         # Bounce back
@@ -136,25 +144,40 @@ class D2Q9Lattice:
             # self.rho_data.append(self.rho.transpose())
 
     def make_animation(self):
+        print("########################################################")
         if self.animate:
-            print("\nAnimation has {} frames.".format(len(self.u_data)))
+            print("# Animation has {} frames.                            #".format(len(self.u_data)))
         else:
             print("No postprocessing requested. Exiting..")
             return 1
 
-        print("Making animation, please wait..")
+        print("# Making animation, please wait..                      #")
+        print("########################################################")
         fig = plt.figure()
+        # plt.legend()
         anim_length, interval = len(self.u_data), 1 / 30
-        min_vel, max_vel = 0, 0.3
+        min_vel, max_vel = 0, 0.1
 
         def update(t):
             plt.clf()
             im = plt.imshow(self.u_data[t], animated=True, interpolation='none', vmin=min_vel, vmax=max_vel)
             return [im]
 
-        # anim = animation.ArtistAnimation(fig, ims, interval=interval, blit=False)E
+        # anim = animation.ArtistAnimation(fig, ims, interval=interval,     blit=False)E
         anim = animation.FuncAnimation(fig, update, frames=anim_length, interval=interval, blit=True)
-        str_name = "output/animation - {}.mp4".format(datetime.now())
-        writer = animation.FFMpegWriter(fps=30, metadata=dict(artist='Me'), bitrate=1800)
+        str_name = "output/animation - Re: {} - Visc: {} - {}.mp4".format(self.Re, self.nu, datetime.now())
+        writer = animation.FFMpegWriter(fps=60, metadata=dict(artist='Me'), bitrate=1800)
         anim.save(str_name, writer=writer)
-        print("animation saved as: \"{}\"".format(str_name))
+        print("# Animation saved in: \"{}\"".format(str_name))
+
+    def run(self, maxiter):
+        start = time.time()
+        for iteration in progressbar(range(maxiter)):
+            self.step()
+        self.runtime = time.time() - start
+
+    def show_performance(self):
+        MLUPS = self.Nx * self.Ny * self.t / (self.runtime * 1e6)
+        print("########################################################")
+        print("# Average performance is : {:.2f} MLUPS                  #".format(MLUPS))
+        print("########################################################")
