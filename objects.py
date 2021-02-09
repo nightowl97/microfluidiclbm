@@ -57,12 +57,12 @@ class D2Q9Lattice:
 
         self.ini_vel = ini_vel
         self.Re = re
-        self.nu = self.ini_vel * self.Ny / self.Re  # U * r / Re
+        self.nu = self.ini_vel * (self.Ny / 20) / self.Re  # U * r / Re
         self.omega = 1 / (3 * self.nu + 0.5)
         if self.omega > 1:
             print("########################################################")
             print("# Flow with viscosity (in lattice units): {:4f}     #".format(self.nu))
-            print("# Over-relaxed simulation: w = {:.2f}                 #".format(self.omega))
+            print("# Over-relaxed simulation: w = {:.2f}                   #".format(self.omega))
             print("########################################################")
 
         # Initialize state
