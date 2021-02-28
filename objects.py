@@ -26,7 +26,7 @@ class D2Q9Lattice:
     D, Q = 2, 9
     # Lattice Velocities
     c_list = [(x, y) for x in [0, 1, -1] for y in [0, 1, -1]]
-    c = np.array(c_list)
+    c = np  .array(c_list)
 
     # Incoming columns
     incoming_right = np.arange(9)[np.array([vel[0] == -1 for vel in c])]
@@ -34,7 +34,7 @@ class D2Q9Lattice:
     center = np.arange(9)[np.array([vel[0] == 0 for vel in c])]
 
     # Interaction strength
-    G = .1
+    G = 6
 
     def __init__(self, geometry_image, ini_vel, re, animate=False):
         # Initialize object and get geometry
@@ -62,31 +62,32 @@ class D2Q9Lattice:
         self.fluid = ~self.geometry
         self.inlet_f, self.inlet_g, self.outlet = self.fluid.copy(), self.fluid.copy(), self.fluid.copy()
         self.inlet_f[1:, :], self.inlet_g[1:, :] = False, False
-        self.inlet_f[:, halfheight:], self.inlet_g[:, :halfheight] = False, False
+        self.inlet_f[:, :halfheight], self.inlet_g[:, halfheight:] = False, False
         self.outlet[:-1, :] = False
-        self.fluid = self.fluid & ~self.inlet_f & ~self.inlet_g
+        self.inner_domain = self.fluid & ~self.inlet_f & ~self.inlet_g
         bottom_half, top_half = self.fluid.copy(), self.fluid.copy()
-        bottom_half[:, halfheight:], top_half[:, :halfheight] = False, False
+        bottom_half[:, :halfheight], top_half[:, halfheight:] = False, False
 
         self.Fout = np.zeros((self.Nx, self.Ny, self.Q))
         self.Gout = np.zeros((self.Nx, self.Ny, self.Q))
 
         self.u_prime = np.zeros((self.Nx, self.Ny, self.D))
         self.rho_f, self.rho_g = np.zeros((self.Nx, self.Ny, 1)), np.zeros((self.Nx, self.Ny, 1))
-        self.rho_f[self.fluid] = .49 * np.ones((self.Nx, self.Ny, 1))[self.fluid] + 0.05 * np.random.rand(self.Nx, self.Ny, 1)[self.fluid]
+        self.rho_f[self.fluid] = .5 * np.ones((self.Nx, self.Ny, 1))[self.fluid] + 0.1 * np.random.rand(self.Nx, self.Ny, 1)[self.fluid]
         self.rho_f[top_half] = .1
-        self.rho_g[self.fluid] = .51 * np.ones((self.Nx, self.Ny, 1))[self.fluid] + 0.05 * np.random.rand(self.Nx, self.Ny, 1)[self.fluid]
+        self.rho_g[self.fluid] = .5 * np.ones((self.Nx, self.Ny, 1))[self.fluid] + 0.1 * np.random.rand(self.Nx, self.Ny, 1)[self.fluid]
         self.rho_g[bottom_half] = .1
 
         self.ini_vel = ini_vel
         self.Re = re  # Higher Re usually needs higher characteristic length
         self.nu = self.ini_vel * self.Ny / self.Re  # U * d / Re
-        self.omega_f = self.omega_g = 1 / (3 * self.nu + 0.5)
-        print("Relaxation time is {:.2f}".format(self.omega_f))
+        self.omega_f = 1 / (3 * self.nu + 0.5)
+        self.omega_g = self.omega_f + .2
+        print("Relaxation times are f: {:.2f} and g: {:.2f}".format(self.omega_f, self.omega_g))
 
         # Initialize state
         self.u_prime[self.fluid] = np.asarray([[self.ini_vel, 0]])
-        # self.u_prime[:, :halfheight] = .5 * np.asarray([[self.ini_vel, 0]])
+        # self.u_prime[:, :halfhei  ght] = .5 * np.asarray([[self.ini_vel, 0]])
         self.u_prime[self.geometry] = np.asarray([[0, 0]])
         self.Feq = self.equilibrium(self.rho_f, self.u_prime)
         self.Geq = self.equilibrium(self.rho_g, self.u_prime)
@@ -108,9 +109,9 @@ class D2Q9Lattice:
 
     def equilibrium(self, rho, u):
         if np.any(rho < 0):
-            print("Negative densities found!")
+            print("Negative densities found! Continuing anyway..")
         u_squared = (3 / 2) * (u[:, :, 0] ** 2 + u[:, :, 1] ** 2)
-        cu = np.dot(u, self.c.transpose())
+        cu = np.dot(u, self.c.transpose())  # TODO:  Check if not backwards
         feq = np.zeros((self.Nx, self.Ny, self.Q))
         for vel in range(self.Q):
             feq[:, :, vel] = self.weights[vel] * rho[:, :, 0] * \
@@ -143,46 +144,47 @@ class D2Q9Lattice:
         try:
             psi_f, psi_g = 1 - np.exp(-self.rho_f), 1 - np.exp(-self.rho_g)
         except FloatingPointError:
-            div = self.rho_f > 1
-            print(np.max(self.rho_f))
+            divergence = self.rho_f > 1
+            print("Density divergence at of order {} at {}".format(np.max(self.rho_f), np.where(self.rho_f > 1)))
             psi_f, psi_g = 1 - np.exp(-self.rho_f), 1 - np.exp(-self.rho_g)
-        for x in range(self.Nx):
+        for x in range(1, self.Nx - 1):
             for y in range(1, self.Ny - 1):
-                if x == self.Nx - 1:
-                    Fsc[x, y, 1] += self.weights[1] * psi_g[x, y + 1] - self.weights[2] * psi_g[x, y - 1]
-                    Gsc[x, y, 1] += self.weights[1] * psi_f[x, y + 1] - self.weights[2] * psi_f[x, y - 1]
-                    Fsc[x, y, 1] += self.weights[7] * psi_g[x - 1, y + 1] - self.weights[8] * psi_g[x - 1, y - 1]
-                    Gsc[x, y, 1] += self.weights[7] * psi_f[x - 1, y + 1] - self.weights[8] * psi_f[x - 1, y - 1]
-                    continue
-                if x == 0:
-                    Fsc[x, y, 1] += self.weights[1] * psi_g[x, y + 1] - self.weights[2] * psi_g[x, y - 1]
-                    Gsc[x, y, 1] += self.weights[1] * psi_f[x, y + 1] - self.weights[2] * psi_f[x, y - 1]
-                    Fsc[x, y, 1] += self.weights[4] * psi_g[x + 1, y + 1] - self.weights[5] * psi_g[x + 1, y - 1]
-                    Gsc[x, y, 1] += self.weights[4] * psi_f[x + 1, y + 1] - self.weights[5] * psi_f[x + 1, y - 1]
-                    continue
-
-                # Each group represents a particular column of velocities
-                Fsc[x, y, 1] += self.weights[1] * psi_g[x, y + 1] - self.weights[2] * psi_g[x, y - 1]
-                Gsc[x, y, 1] += self.weights[1] * psi_f[x, y + 1] - self.weights[2] * psi_f[x, y - 1]
-
-                Fsc[x, y, 0] += self.weights[3] * psi_g[x + 1, y] + \
-                                self.weights[4] * psi_g[x + 1, y + 1] + self.weights[5] * psi_g[x + 1, y - 1]
-                Fsc[x, y, 1] += self.weights[4] * psi_g[x + 1, y + 1] - self.weights[5] * psi_g[x + 1, y - 1]
-                Gsc[x, y, 0] += self.weights[3] * psi_f[x + 1, y] + self.weights[4] * psi_f[x + 1, y + 1] + self.weights[5] * psi_f[x + 1, y - 1]
-                Gsc[x, y, 1] += self.weights[4] * psi_f[x + 1, y + 1] - self.weights[5] * psi_f[x + 1, y - 1]
-
-                Fsc[x, y, 0] -= self.weights[6] * psi_g[x - 1, y] - \
-                                self.weights[7] * psi_g[x - 1, y + 1] - self.weights[8] * psi_g[x - 1, y - 1]
-                Fsc[x, y, 1] += self.weights[7] * psi_g[x - 1, y + 1] - self.weights[8] * psi_g[x - 1, y - 1]
-                Gsc[x, y, 0] -= self.weights[6] * psi_f[x - 1, y] - \
-                                self.weights[7] * psi_f[x - 1, y + 1] - self.weights[8] * psi_f[x - 1, y - 1]
-                Gsc[x, y, 1] += self.weights[7] * psi_f[x - 1, y + 1] - self.weights[8] * psi_f[x - 1, y - 1]
+                # if x == self.Nx - 1:
+                #     Fsc[x, y, 1] += self.weights[1] * psi_g[x, y + 1] - self.weights[2] * psi_g[x, y - 1]
+                #     Gsc[x, y, 1] += self.weights[1] * psi_f[x, y + 1] - self.weights[2] * psi_f[x, y - 1]
+                #     Fsc[x, y, 1] += self.weights[7] * psi_g[x - 1, y + 1] - self.weights[8] * psi_g[x - 1, y - 1]
+                #     Gsc[x, y, 1] += self.weights[7] * psi_f[x - 1, y + 1] - self.weights[8] * psi_f[x - 1, y - 1]
+                #     continue
+                # if x == 0:
+                #     Fsc[x, y, 1] += self.weights[1] * psi_g[x, y + 1] - self.weights[2] * psi_g[x, y - 1]
+                #     Gsc[x, y, 1] += self.weights[1] * psi_f[x, y + 1] - self.weights[2] * psi_f[x, y - 1]
+                #     Fsc[x, y, 1] += self.weights[4] * psi_g[x + 1, y + 1] - self.weights[5] * psi_g[x + 1, y - 1]
+                #     Gsc[x, y, 1] += self.weights[4] * psi_f[x + 1, y + 1] - self.weights[5] * psi_f[x + 1, y - 1]
+                #     continue
+                #
+                # # Each group represents a particular column of velocities
+                # Fsc[x, y, 1] += self.weights[1] * psi_g[x, y + 1] - self.weights[2] * psi_g[x, y - 1]
+                # Gsc[x, y, 1] += self.weights[1] * psi_f[x, y + 1] - self.weights[2] * psi_f[x, y - 1]
+                #
+                # Fsc[x, y, 0] += self.weights[3] * psi_g[x + 1, y] + \
+                #                 self.weights[4] * psi_g[x + 1, y + 1] + self.weights[5] * psi_g[x + 1, y - 1]
+                # Fsc[x, y, 1] += self.weights[4] * psi_g[x + 1, y + 1] - self.weights[5] * psi_g[x + 1, y - 1]
+                # Gsc[x, y, 0] += self.weights[3] * psi_f[x + 1, y] + self.weights[4] * psi_f[x + 1, y + 1] + self.weights[5] * psi_f[x + 1, y - 1]
+                # Gsc[x, y, 1] += self.weights[4] * psi_f[x + 1, y + 1] - self.weights[5] * psi_f[x + 1, y - 1]
+                #
+                # Fsc[x, y, 0] -= self.weights[6] * psi_g[x - 1, y] - \
+                #                 self.weights[7] * psi_g[x - 1, y + 1] - self.weights[8] * psi_g[x - 1, y - 1]
+                # Fsc[x, y, 1] += self.weights[7] * psi_g[x - 1, y + 1] - self.weights[8] * psi_g[x - 1, y - 1]
+                # Gsc[x, y, 0] -= self.weights[6] * psi_f[x - 1, y] - \
+                #                 self.weights[7] * psi_f[x - 1, y + 1] - self.weights[8] * psi_f[x - 1, y - 1]
+                # Gsc[x, y, 1] += self.weights[7] * psi_f[x - 1, y + 1] - self.weights[8] * psi_f[x - 1, y - 1]
         #
-        #         # for vel in range(self.Q):
-        #         #     Fsc[x, y, 0] += self.weights[vel] * psi_g[x + self.c[vel, 0], y + self.c[vel, 1]] * self.c[vel, 0]
-        #         #     Fsc[x, y, 1] += self.weights[vel] * psi_g[x + self.c[vel, 0], y + self.c[vel, 1]] * self.c[vel, 1]
-        #         #     Gsc[x, y, 0] += self.weights[vel] * psi_f[x + self.c[vel, 0], y + self.c[vel, 1]] * self.c[vel, 0]
-        #         #     Gsc[x, y, 1] += self.weights[vel] * psi_f[x + self.c[vel, 0], y + self.c[vel, 1]] * self.c[vel, 1]
+                for vel in range(1, self.Q):
+                    Fsc[x, y, 0] += self.weights[vel] * psi_g[x + self.c[vel, 0], y + self.c[vel, 1]] * self.c[vel, 0]
+                    Fsc[x, y, 1] += self.weights[vel] * psi_g[x + self.c[vel, 0], y + self.c[vel, 1]] * self.c[vel, 1]
+                    Gsc[x, y, 0] += self.weights[vel] * psi_f[x + self.c[vel, 0], y + self.c[vel, 1]] * self.c[vel, 0]
+                    Gsc[x, y, 1] += self.weights[vel] * psi_f[x + self.c[vel, 0], y + self.c[vel, 1]] * self.c[vel, 1]
+
         Fsc *= - self.G * psi_f
         Gsc *= - self.G * psi_g
         return Fsc, Gsc
@@ -204,18 +206,18 @@ class D2Q9Lattice:
         self.rho_f[self.inlet_f, 0] = (1 / (1 - self.u_prime[self.inlet_f, 0])) * \
                                         (self.sum_pops(self.Fin[self.inlet_f][:, self.center]) +
                                          2 * self.sum_pops(self.Fin[self.inlet_f][:, self.incoming_right]))
-        self.rho_f[self.inlet_g, 0] = (1 / (1 - self.u_prime[self.inlet_g, 0])) * \
-                                        (self.sum_pops(self.Fin[self.inlet_g][:, self.center]) +
-                                         2 * self.sum_pops(self.Fin[self.inlet_g][:, self.incoming_right]))
+        # self.rho_f[self.inlet_g, 0] = (1 / (1 - np.zeros_like(self.u_prime[self.inlet_f, 0]))) * \
+        #                                 (self.sum_pops(self.Fin[self.inlet_g][:, self.center]) +
+        #                                  2 * self.sum_pops(self.Fin[self.inlet_g][:, self.incoming_right]))
         self.rho_g[self.inlet_g, 0] = (1 / (1 - self.u_prime[self.inlet_g, 0])) * \
                                         (self.sum_pops(self.Gin[self.inlet_g][:, self.center]) +
                                          2 * self.sum_pops(self.Gin[self.inlet_g][:, self.incoming_right]))
-        self.rho_g[self.inlet_f, 0] = (1 / (1 - self.u_prime[self.inlet_f, 0])) * \
-                                         (self.sum_pops(self.Gin[self.inlet_f][:, self.center]) +
-                                          2 * self.sum_pops(self.Gin[self.inlet_f][:, self.incoming_right]))
+        # self.rho_g[self.inlet_f, 0] = (1 / (1 - np.zeros_like(self.u_prime[self.inlet_f, 0]))) * \
+        #                                  (self.sum_pops(self.Gin[self.inlet_f][:, self.center]) +
+        #                                   2 * self.sum_pops(self.Gin[self.inlet_f][:, self.incoming_right]))
 
         # Filter negative values of density
-        self.rho_g[self.rho_g < 0], self.rho_f[self.rho_f < 0] = 0.001, 0.001
+        # self.rho_g[self.rho_g < 0], self.rho_f[self.rho_f < 0] = 0.001, 0.001
         self.u_prime[self.geometry] = 0
 
         # Shan Chen Forces
@@ -223,10 +225,10 @@ class D2Q9Lattice:
 
         # Calculate velocities
         f_dot, g_dot = np.dot(self.Fin, self.c), np.dot(self.Gin, self.c)
-        self.u_prime[self.fluid] = (self.omega_f * f_dot[self.fluid] + self.omega_g * g_dot[self.fluid]) / \
-                       (self.omega_f * self.rho_f[self.fluid] + self.omega_g * self.rho_g[self.fluid])
+        self.u_prime[self.inner_domain] = (self.omega_f * f_dot[self.inner_domain] + self.omega_g * g_dot[self.inner_domain]) / \
+                       (self.omega_f * self.rho_f[self.inner_domain] + self.omega_g * self.rho_g[self.inner_domain])
 
-        u_f_eq, u_g_eq = np.zeros_like(self.u_prime), np.zeros_like(self.u_prime)
+        u_f_eq, u_g_eq = self.u_prime.copy(), self.u_prime.copy()
         u_f_eq[self.fluid] = self.u_prime[self.fluid] + Fsc[self.fluid] / (self.omega_f * self.rho_f[self.fluid])
         u_g_eq[self.fluid] = self.u_prime[self.fluid] + Gsc[self.fluid] / (self.omega_g * self.rho_g[self.fluid])
 
@@ -237,28 +239,32 @@ class D2Q9Lattice:
         # Finalize Zou/He
         self.Fin[self.inlet_f][:, self.incoming_left] = self.Fin[self.inlet_f][:, self.incoming_right] \
                                                         + self.Feq[self.inlet_f][:, self.incoming_left] \
-                                                        - self.Feq[self.inlet_f][:, self.incoming_right]
-        self.Fin[self.inlet_g][:, self.incoming_left] = self.Fin[self.inlet_g][:, self.incoming_right] \
-                                                        + self.Feq[self.inlet_g][:, self.incoming_left] \
-                                                        - self.Feq[self.inlet_g][:, self.incoming_right]
+                                                        - self.Fin[self.inlet_f][:, self.incoming_right]
+        # self.Fin[self.inlet_g][:, self.incoming_left] = self.Fin[self.inlet_g][:, self.incoming_right] \
+        #                                                 + self.Feq[self.inlet_g][:, self.incoming_left] \
+        #                                                 - self.Fin[self.inlet_g][:, self.incoming_right]
         self.Gin[self.inlet_g][:, self.incoming_left] = self.Gin[self.inlet_g][:, self.incoming_right] \
                                                         + self.Geq[self.inlet_g][:, self.incoming_left] \
-                                                        - self.Geq[self.inlet_g][:, self.incoming_right]
-        self.Gin[self.inlet_f][:, self.incoming_left] = self.Gin[self.inlet_f][:, self.incoming_right] \
-                                                        + self.Geq[self.inlet_f][:, self.incoming_left] \
-                                                        - self.Geq[self.inlet_f][:, self.incoming_right]
+                                                        - self.Gin[self.inlet_g][:, self.incoming_right]
+        # self.Gin[self.inlet_f][:, self.incoming_left] = self.Gin[self.inlet_f][:, self.incoming_right] \
+        #                                                 + self.Geq[self.inlet_f][:, self.incoming_left] \
+        #                                                 - self.Gin[self.inlet_f][:, self.incoming_right]
 
         self.collide()
         self.t += 1
         self.stream()
-        if self.t % 10 == 0:
-            plt.plot(self.rho_f[150])
-            plt.show()
+        # if self.t % 2 == 0:
+        #     u2 = np.sqrt(self.u_prime[self.Nx // 2, :, 0] ** 2 + self.u_prime[self.Nx//2, :, 1] ** 2)
+            # self.u_data.append(u2.transpose())
+            #plt.plot(u2)
+            #plt.show()
 
+        # if self.t % 10 == 0:
+        #     print("iterate")
         if self.animate:
             # u2 = np.sqrt(self.u_prime[:, :, 0] ** 2 + self.u_prime[:, :, 1] ** 2)
             # self.u_data.append(u2.transpose())
-            self.rho_data.append(np.squeeze(self.rho_g).transpose().copy())
+            self.rho_data.append(np.squeeze(self.rho_f).transpose().copy())
 
     def make_animation(self):
         print("########################################################")
@@ -273,6 +279,7 @@ class D2Q9Lattice:
         fig = plt.figure()
         # plt.legend()
         anim_length, interval = len(self.rho_data), 1 / 30
+        # anim_length, interval = len(self.u_data), 1 / 30
         min_vel, max_vel = 0, 0.1
 
         def update(t):
