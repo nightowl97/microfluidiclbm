@@ -7,6 +7,9 @@ import matplotlib.animation as animation
 from datetime import datetime
 from progressbar import progressbar
 import time
+import pyximport
+pyximport.install(language_level=3)
+import performance
 
 # np.seterr(all='raise')
 
@@ -26,7 +29,7 @@ class D2Q9Lattice:
     D, Q = 2, 9
     # Lattice Velocities
     c_list = [(x, y) for x in [0, 1, -1] for y in [0, 1, -1]]
-    c = np  .array(c_list)
+    c = np.array(c_list, dtype=np.intc)
 
     # Incoming columns
     incoming_right = np.arange(9)[np.array([vel[0] == -1 for vel in c])]
@@ -34,7 +37,7 @@ class D2Q9Lattice:
     center = np.arange(9)[np.array([vel[0] == 0 for vel in c])]
 
     # Interaction strength
-    G = 6
+    G = 7
 
     def __init__(self, geometry_image, ini_vel, re, animate=False):
         # Initialize object and get geometry
@@ -74,9 +77,9 @@ class D2Q9Lattice:
         self.u_prime = np.zeros((self.Nx, self.Ny, self.D))
         self.rho_f, self.rho_g = np.zeros((self.Nx, self.Ny, 1)), np.zeros((self.Nx, self.Ny, 1))
         self.rho_f[self.fluid] = .5 * np.ones((self.Nx, self.Ny, 1))[self.fluid] + 0.1 * np.random.rand(self.Nx, self.Ny, 1)[self.fluid]
-        self.rho_f[top_half] = .1
+        self.rho_f[top_half] = .01
         self.rho_g[self.fluid] = .5 * np.ones((self.Nx, self.Ny, 1))[self.fluid] + 0.1 * np.random.rand(self.Nx, self.Ny, 1)[self.fluid]
-        self.rho_g[bottom_half] = .1
+        self.rho_g[bottom_half] = .01
 
         self.ini_vel = ini_vel
         self.Re = re  # Higher Re usually needs higher characteristic length
@@ -87,7 +90,7 @@ class D2Q9Lattice:
 
         # Initialize state
         self.u_prime[self.fluid] = np.asarray([[self.ini_vel, 0]])
-        # self.u_prime[:, :halfhei  ght] = .5 * np.asarray([[self.ini_vel, 0]])
+        self.u_prime[:, :halfheight] = .1 * np.asarray([[self.ini_vel, 0]])  # Different velocities
         self.u_prime[self.geometry] = np.asarray([[0, 0]])
         self.Feq = self.equilibrium(self.rho_f, self.u_prime)
         self.Geq = self.equilibrium(self.rho_g, self.u_prime)
@@ -191,10 +194,10 @@ class D2Q9Lattice:
 
     # Move Lattice from t to t + 1
     def step(self):
-
+        # TODO: Check outflow and inflow conditions
         # Outflow
-        self.Fin[-1, :, self.incoming_right] = self.Fin[-2, :, self.incoming_right]
-        self.Gin[-1, :, self.incoming_right] = self.Gin[-2, :, self.incoming_right]
+        self.Fin[-1, :, self.incoming_left] = self.Fin[-2, :, self.incoming_left]
+        self.Gin[-1, :, self.incoming_left] = self.Gin[-2, :, self.incoming_left]
 
         # Densities and Pseudopotential
         self.rho_f = self.sum_pops(self.Fin)
@@ -217,11 +220,13 @@ class D2Q9Lattice:
         #                                   2 * self.sum_pops(self.Gin[self.inlet_f][:, self.incoming_right]))
 
         # Filter negative values of density
-        # self.rho_g[self.rho_g < 0], self.rho_f[self.rho_f < 0] = 0.001, 0.001
+        # TODO: Make velocity = 0 when rho <= 0
+        self.rho_g[self.rho_g < 0], self.rho_f[self.rho_f < 0] = 0.001, 0.001
         self.u_prime[self.geometry] = 0
 
-        # Shan Chen Forces
-        Fsc, Gsc = self.shan_chen_forces()
+        # Shan Chen Forces using Cython
+        psi_f, psi_g = np.squeeze(1 - np.exp(-self.rho_f)), np.squeeze(1 - np.exp(-self.rho_g))
+        Fsc, Gsc = performance.cy_shan_chen(psi_f, psi_g, self.c, self.weights, self.Q, self.Nx, self.Ny, self.G)
 
         # Calculate velocities
         f_dot, g_dot = np.dot(self.Fin, self.c), np.dot(self.Gin, self.c)
@@ -253,15 +258,12 @@ class D2Q9Lattice:
         self.collide()
         self.t += 1
         self.stream()
-        # if self.t % 2 == 0:
-        #     u2 = np.sqrt(self.u_prime[self.Nx // 2, :, 0] ** 2 + self.u_prime[self.Nx//2, :, 1] ** 2)
-            # self.u_data.append(u2.transpose())
-            #plt.plot(u2)
-            #plt.show()
 
-        # if self.t % 10 == 0:
-        #     print("iterate")
         if self.animate:
+            # if self.t % 10 == 0:
+            #     plt.imshow(np.squeeze(self.rho_f).transpose())
+            #     plt.axis('off')
+            #     plt.show()
             # u2 = np.sqrt(self.u_prime[:, :, 0] ** 2 + self.u_prime[:, :, 1] ** 2)
             # self.u_data.append(u2.transpose())
             self.rho_data.append(np.squeeze(self.rho_f).transpose().copy())
