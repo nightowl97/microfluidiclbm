@@ -6,7 +6,7 @@ import numpy as np
 
 cpdef cy_shan_chen(double [:, ::1] psi_f, double [:, ::1] psi_g, int [:, ::1] c, double [::1] w, int q, int nx, int ny, int g):
     """
-    Python exposed "interface" function
+    Python exposed function
     :param psi_f: Pseudopotential for the first component
     :param psi_g: Pseudopotential for the second component
     :param c: Lattice velocities
@@ -25,9 +25,12 @@ cpdef cy_shan_chen(double [:, ::1] psi_f, double [:, ::1] psi_g, int [:, ::1] c,
         int x = 0
         int y = 0
         int vel = 0
-    for x in range(1, nx - 1):
+
+    for x in range(nx):
         for y in range(1, ny - 1):
             for vel in range(1, q):
+                if x == 0 and c[vel, 0] < 0: continue
+                if x == nx - 1 and c[vel, 0] > 0: continue
                 fsc[x, y, 0] += - g * psi_f[x, y] * w[vel] * psi_g[x + c[vel, 0], y + c[vel, 1]] * c[vel, 0]
                 fsc[x, y, 1] += - g * psi_f[x, y] * w[vel] * psi_g[x + c[vel, 0], y + c[vel, 1]] * c[vel, 1]
 

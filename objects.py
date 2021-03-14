@@ -8,6 +8,7 @@ from datetime import datetime
 from progressbar import progressbar
 import time
 import pyximport
+import matplotlib.cm as cm
 pyximport.install(language_level=3)
 import performance
 
@@ -77,20 +78,24 @@ class D2Q9Lattice:
         self.u_prime = np.zeros((self.Nx, self.Ny, self.D))
         self.rho_f, self.rho_g = np.zeros((self.Nx, self.Ny, 1)), np.zeros((self.Nx, self.Ny, 1))
         self.rho_f[self.fluid] = .5 * np.ones((self.Nx, self.Ny, 1))[self.fluid] + 0.1 * np.random.rand(self.Nx, self.Ny, 1)[self.fluid]
-        self.rho_f[top_half] = .01
+        # self.rho_f[top_half] = .01
         self.rho_g[self.fluid] = .5 * np.ones((self.Nx, self.Ny, 1))[self.fluid] + 0.1 * np.random.rand(self.Nx, self.Ny, 1)[self.fluid]
-        self.rho_g[bottom_half] = .01
+        # self.rho_g[bottom_half] = .01
+
+        # Electric field
+        self.phi = np.zeros((self.Nx, self.Ny))
+        self.E = np.zeros_like(self.u_prime)
 
         self.ini_vel = ini_vel
         self.Re = re  # Higher Re usually needs higher characteristic length
         self.nu = self.ini_vel * self.Ny / self.Re  # U * d / Re
         self.omega_f = 1 / (3 * self.nu + 0.5)
         self.omega_g = self.omega_f + .2
-        print("Relaxation times are f: {:.2f} and g: {:.2f}".format(self.omega_f, self.omega_g))
+        print("Relaxation times are f: {:.2f} and g: {:.2f}".format(1 / self.omega_f, 1 / self.omega_g))
 
         # Initialize state
-        self.u_prime[self.fluid] = np.asarray([[self.ini_vel, 0]])
-        self.u_prime[:, :halfheight] = .1 * np.asarray([[self.ini_vel, 0]])  # Different velocities
+        self.u_prime[self.fluid] = 0 * np.asarray([[self.ini_vel, 0]])
+        self.u_prime[:, :halfheight] = 0 * np.asarray([[self.ini_vel, 0]])  # Different velocities
         self.u_prime[self.geometry] = np.asarray([[0, 0]])
         self.Feq = self.equilibrium(self.rho_f, self.u_prime)
         self.Geq = self.equilibrium(self.rho_g, self.u_prime)
@@ -100,6 +105,7 @@ class D2Q9Lattice:
         if animate:
             self.rho_data = []
             self.u_data = []
+            self.e_data = []
 
     @staticmethod
     def sum_pops(sites):
@@ -110,34 +116,36 @@ class D2Q9Lattice:
         else:
             return np.sum(sites, axis=-1)
 
+    # @profile
     def equilibrium(self, rho, u):
-        if np.any(rho < 0):
-            print("Negative densities found! Continuing anyway..")
         u_squared = (3 / 2) * (u[:, :, 0] ** 2 + u[:, :, 1] ** 2)
-        cu = np.dot(u, self.c.transpose())  # TODO:  Check if not backwards
+        cu = np.dot(u, self.c.transpose())  # TODO: Replace with explicit formulas
         feq = np.zeros((self.Nx, self.Ny, self.Q))
         for vel in range(self.Q):
             feq[:, :, vel] = self.weights[vel] * rho[:, :, 0] * \
                               (1 + 3 * cu[:, :, vel] + (9 / 2) * (cu[:, :, vel] ** 2) - u_squared)
+        if np.any(rho < 0):
+            # If we find zero or negative densities, Feq is 0
+            print("Negative densities found! Continuing anyway..")
+            print(np.where(rho <= 0))
+            mask = rho[:, :, 0] <= 0
+            feq[mask] = np.zeros(9)
         return feq
 
+    # @profile
     def collide(self):
         # self.Fout = self.Fin - self.omega * (self.Fin - self.Feq)
         fin, w_f, feq = self.Fin, self.omega_f, self.Feq
         gin, w_g, geq = self.Gin, self.omega_g, self.Geq
         self.Fout = ne.evaluate("fin - w_f * (fin - feq)")  # use numexpr
         self.Gout = ne.evaluate("gin - w_g * (gin - geq)")
-        # self.Fout[self.fluid] = self.Fin[self.fluid] - self.omega * \
-        #                                  (self.Fin[self.fluid] - self.Feq[self.fluid])
         # Bounce back
         for vel in range(self.Q):
             self.Fout[self.geometry, vel] = self.Fin[self.geometry, self.c_opposite[vel]]
             self.Gout[self.geometry, vel] = self.Gin[self.geometry, self.c_opposite[vel]]
-            # g, vel, cop = self.geometry, vel, self.c_opposite
-            # self.Fout[self.geometry, vel] = ne.evaluate("fin[g, cop[vel]]")
 
+    # @profile
     def stream(self):
-        # TODO: change periodic streaming
         for vel in range(self.Q):
             self.Fin[:, :, vel] = np.roll(np.roll(self.Fout[:, :, vel], self.c[vel, 0], axis=0), self.c[vel, 1], axis=1)
             self.Gin[:, :, vel] = np.roll(np.roll(self.Gout[:, :, vel], self.c[vel, 0], axis=0), self.c[vel, 1], axis=1)
@@ -193,6 +201,7 @@ class D2Q9Lattice:
         return Fsc, Gsc
 
     # Move Lattice from t to t + 1
+    # @profile
     def step(self):
         # TODO: Check outflow and inflow conditions
         # Outflow
@@ -234,39 +243,70 @@ class D2Q9Lattice:
                        (self.omega_f * self.rho_f[self.inner_domain] + self.omega_g * self.rho_g[self.inner_domain])
 
         u_f_eq, u_g_eq = self.u_prime.copy(), self.u_prime.copy()
-        u_f_eq[self.fluid] = self.u_prime[self.fluid] + Fsc[self.fluid] / (self.omega_f * self.rho_f[self.fluid])
-        u_g_eq[self.fluid] = self.u_prime[self.fluid] + Gsc[self.fluid] / (self.omega_g * self.rho_g[self.fluid])
+        u_f_eq[self.inner_domain] = self.u_prime[self.inner_domain] + Fsc[self.inner_domain] / (self.omega_f * self.rho_f[self.inner_domain])
+        u_g_eq[self.inner_domain] = self.u_prime[self.inner_domain] + Gsc[self.inner_domain] / (self.omega_g * self.rho_g[self.inner_domain])
 
         # Equilibrium
         self.Feq = self.equilibrium(self.rho_f, u_f_eq)
         self.Geq = self.equilibrium(self.rho_g, u_g_eq)
 
         # Finalize Zou/He
-        self.Fin[self.inlet_f][:, self.incoming_left] = self.Fin[self.inlet_f][:, self.incoming_right] \
-                                                        + self.Feq[self.inlet_f][:, self.incoming_left] \
-                                                        - self.Fin[self.inlet_f][:, self.incoming_right]
+        self.Fin[self.inlet_f][:, self.incoming_left] = self.Feq[self.inlet_f][:, self.incoming_left]
         # self.Fin[self.inlet_g][:, self.incoming_left] = self.Fin[self.inlet_g][:, self.incoming_right] \
         #                                                 + self.Feq[self.inlet_g][:, self.incoming_left] \
         #                                                 - self.Fin[self.inlet_g][:, self.incoming_right]
-        self.Gin[self.inlet_g][:, self.incoming_left] = self.Gin[self.inlet_g][:, self.incoming_right] \
-                                                        + self.Geq[self.inlet_g][:, self.incoming_left] \
-                                                        - self.Gin[self.inlet_g][:, self.incoming_right]
+        self.Gin[self.inlet_g][:, self.incoming_left] = self.Geq[self.inlet_g][:, self.incoming_left]
         # self.Gin[self.inlet_f][:, self.incoming_left] = self.Gin[self.inlet_f][:, self.incoming_right] \
         #                                                 + self.Geq[self.inlet_f][:, self.incoming_left] \
         #                                                 - self.Gin[self.inlet_f][:, self.incoming_right]
 
+        u2 = np.sqrt(self.u_prime[:, :, 0] ** 2 + self.u_prime[:, :, 1] ** 2)
+        if np.any(u2 > .57):
+            print("Warning, velocity divergence immminent")
         self.collide()
         self.t += 1
         self.stream()
 
+        self.poisson()
+
         if self.animate:
-            # if self.t % 10 == 0:
-            #     plt.imshow(np.squeeze(self.rho_f).transpose())
-            #     plt.axis('off')
-            #     plt.show()
-            # u2 = np.sqrt(self.u_prime[:, :, 0] ** 2 + self.u_prime[:, :, 1] ** 2)
-            # self.u_data.append(u2.transpose())
             self.rho_data.append(np.squeeze(self.rho_f).transpose().copy())
+            self.u_data.append(u2.transpose())
+            self.e_data.append(self.E[:, :, 0].transpose() ** 2 + self.E[:, :, 1].transpose() ** 2)
+            if self.t % 100 == 0:
+                # print(np.mean(self.rho_f))
+                plt.cla()
+                plt.imshow(np.squeeze(self.rho_f).transpose())
+                # x, y = np.linspace(0, self.Nx, self.Nx), np.linspace(0, self.Ny, self.Ny)
+                # X, Y = np.meshgrid(x, y)
+                # Ex, Ey = self.E[:, :, 0].transpose(), self.E[:, :, 1].transpose()
+                # plt.quiver(X, Y, Ex, Ey)
+                plt.axis('off')
+                plt.show()
+
+    def poisson(self):
+        tol = .001
+        dx, dy = .01, .01
+        x, y = np.linspace(0, self.Nx, self.Nx), np.linspace(0, self.Ny, self.Ny)
+        X, Y = np.meshgrid(x, y)
+        # fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
+
+        b = np.squeeze(self.rho_f) - np.squeeze(self.rho_g)  # source term
+        phi = np.zeros_like(b)
+
+        # stop = False
+
+        for i in range(100):
+            phi_prev = phi.copy()
+            phi[1:-1, 1: -1] = (dx ** 2 * (phi_prev[1:-1, 0:-2] + phi_prev[1:-1, 2:]) + dy ** 2 * (
+                    phi_prev[0:-2, 1:-1] + phi_prev[2:, 1:-1]) - b[1:-1, 1:-1] * dx ** 2 * dy ** 2) / (2 * (dx ** 2 + dy ** 2))
+            phi[0, :], phi[-1, :] = phi[1, :], phi[-2, :]
+            phi[:, 0], phi[:, -1] = phi[:, 1], phi[:, -2]
+
+            diff = phi - phi_prev
+            stop = np.linalg.norm(diff) < tol
+
+        self.E[:-1, :, 0], self.E[:, :-1, 1] = np.diff(phi, axis=0), np.diff(phi, axis=1)  # does not set last element
 
     def make_animation(self):
         print("########################################################")
@@ -280,19 +320,32 @@ class D2Q9Lattice:
         print("# Making animation, please wait..                      #")
         fig = plt.figure()
         # plt.legend()
-        anim_length, interval = len(self.rho_data), 1 / 30
-        # anim_length, interval = len(self.u_data), 1 / 30
+        # anim_length, interval = len(self.rho_data), 1 / 30
+        anim_length, interval = len(self.u_data), 1 / 30
         min_vel, max_vel = 0, 0.1
 
         def update(t):
             plt.clf()
-            im = plt.imshow(self.rho_data[t], animated=True)
-            return [im]
+            plt.cla()
+            plt.subplot(3, 1, 1)
+            plt.axis('off')
+            im1 = plt.imshow(self.rho_data[t], animated=True)
+            plt.title("Rho")
+            plt.subplot(3, 1, 2)
+            plt.axis('off')
+            im2 = plt.imshow(self.u_data[t], animated=True, cmap=cm.coolwarm)
+            plt.title("Champs de vitesses")
+            plt.subplot(3, 1, 3)
+            plt.title("Champs electrique")
+            im3 = plt.imshow(self.e_data[t], animated=True, cmap=cm.coolwarm)
+
+            return [im1, im3]
 
         # anim = animation.ArtistAnimation(fig, ims, interval=interval,     blit=False)E
         anim = animation.FuncAnimation(fig, update, frames=anim_length, interval=interval, blit=True)
         str_name = "output/animation - Re: {} - Visc: {} - {}.mp4".format(self.Re, self.nu, datetime.now())
-        writer = animation.FFMpegWriter(fps=30, metadata=dict(artist='Me'), bitrate=2800)
+        print("# Saving video..                                       #")
+        writer = animation.FFMpegWriter(fps=30)
         anim.save(str_name, writer=writer)
         print("# Animation saved in: \"{}\"".format(str_name))
         print("########################################################")
@@ -306,5 +359,5 @@ class D2Q9Lattice:
     def show_performance(self):
         MLUPS = self.Nx * self.Ny * self.t / (self.runtime * 1e6)
         print("########################################################")
-        print("# Average performance is : {:.4f} MLUPS                  #".format(MLUPS))
+        print("# Average performance is : {:.4f} MLUPS                #".format(MLUPS))
         print("########################################################")
